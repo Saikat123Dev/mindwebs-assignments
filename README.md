@@ -10,23 +10,8 @@ A dynamic and interactive web application for visualizing and analyzing weather 
 
 ### Main Application Interface
 
-![Application Overview](./screenshots/main-interface.png)
+![Application Overview](./screenshots/image.png)
 _Interactive map with timeline slider and polygon sidebar for weather data analysis_
-
-### Timeline Slider Component
-
-![Timeline Slider](./screenshots/timeline-slider.png)
-_Beautiful timeline slider with gradient design and interactive tooltips for time range selection_
-
-### Map Interaction
-
-![Map Drawing](./screenshots/map-drawing.png)
-_Drawing polygons on the map to analyze weather data for specific regions_
-
-### Polygon Management
-
-![Polygon Sidebar](./screenshots/polygon-sidebar.png)
-_Sidebar for managing polygons, data sources, and threshold rules with real-time weather data_
 
 ---
 
