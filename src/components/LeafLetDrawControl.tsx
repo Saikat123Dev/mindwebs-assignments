@@ -62,7 +62,7 @@ const LeafletDrawControl = () => {
       return true;
     };
 
-    map.on(L.Draw.Event.CREATED, (event: any) => {
+    map.on(L.Draw.Event.CREATED, (event) => {
       const layer = event.layer;
       const points = layer.getLatLngs()[0];
       
