@@ -5,8 +5,48 @@ import { AppContext } from '../store/context';
 import { fetchTemperature } from '../utils/fetchWeather';
 import LeafletDrawControl from './LeafLetDrawControl';
 
+// Define necessary types
+type Point = [number, number];
+type PolygonType = {
+  id: string;
+  points: Point[];
+  dataSource?: string;
+  value?: number;
+  color?: string;
+  label?: string;
+  metadata?: {
+    sampleCount: number;
+    totalRequested: number;
+    dataQuality: number;
+    minValue: number;
+    maxValue: number;
+    lastUpdated: string;
+  };
+};
+type TimeRange = {
+  start?: number;
+  end?: number;
+};
+type AppContextType = {
+  polygons?: PolygonType[];
+  updatePolygon?: (polygon: PolygonType) => void;
+  setThresholdRules?: (rules: any) => void;
+  thresholdRules?: any[];
+  evaluateThresholds?: () => void;
+  timeRange?: TimeRange;
+};
+
 const ReactMap = () => {
-  const { polygons, updatePolygon, setThresholdRules, thresholdRules, evaluateThresholds, timeRange } = useContext(AppContext);
+  const context = useContext(AppContext) as AppContextType | undefined;
+  const {
+    polygons = [],
+    updatePolygon = () => {},
+    setThresholdRules = () => {},
+    thresholdRules = [],
+    evaluateThresholds = () => {},
+    timeRange = {}
+  } = context || {};
+
   const fetchingRef = useRef(false);
 
   useEffect(() => {
@@ -17,68 +57,46 @@ const ReactMap = () => {
     ]);
   }, [setThresholdRules]);
 
-  // Calculate polygon area in square kilometers
-  const calculatePolygonArea = useCallback((polygonPoints) => {
+  const calculatePolygonArea = useCallback((polygonPoints: Point[]) => {
     if (!polygonPoints || polygonPoints.length < 3) return 0;
     
     try {
       const leafletPolygon = L.polygon(polygonPoints);
       const bounds = leafletPolygon.getBounds();
       
-      // Approximate area calculation using bounds (rough estimate)
       const latDiff = bounds.getNorth() - bounds.getSouth();
       const lngDiff = bounds.getEast() - bounds.getWest();
       
-      // Convert to approximate km² (very rough estimation)
-      // 1 degree ≈ 111 km at equator, varies by latitude
       const avgLat = (bounds.getNorth() + bounds.getSouth()) / 2;
-      const latToKm = 111; // km per degree latitude
-      const lngToKm = 111 * Math.cos(avgLat * Math.PI / 180); // km per degree longitude at this latitude
+      const latToKm = 111;
+      const lngToKm = 111 * Math.cos(avgLat * Math.PI / 180);
       
       const areaKm2 = (latDiff * latToKm) * (lngDiff * lngToKm);
-      return Math.max(areaKm2, 0.1); // Minimum 0.1 km²
+      return Math.max(areaKm2, 0.1);
     } catch (error) {
       console.error('Error calculating polygon area:', error);
-      return 1; // Default to 1 km²
+      return 1;
     }
   }, []);
 
-  // Dynamic grid size calculation based on area
-  const calculateOptimalGridSize = useCallback((areaKm2) => {
-    // Define sampling density based on area size
+  const calculateOptimalGridSize = useCallback((areaKm2: number) => {
     let gridSize;
     
-    if (areaKm2 <= 1) {
-      // Very small areas: 2x2 grid (4 points)
-      gridSize = 2;
-    } else if (areaKm2 <= 10) {
-      // Small areas: 3x3 grid (9 points)
-      gridSize = 3;
-    } else if (areaKm2 <= 50) {
-      // Medium areas: 4x4 grid (16 points)
-      gridSize = 4;
-    } else if (areaKm2 <= 200) {
-      // Large areas: 5x5 grid (25 points)
-      gridSize = 5;
-    } else if (areaKm2 <= 500) {
-      // Very large areas: 6x6 grid (36 points)
-      gridSize = 6;
-    } else {
-      // Extremely large areas: 7x7 grid (49 points) - but consider hierarchical sampling
-      gridSize = 7;
-    }
+    if (areaKm2 <= 1) gridSize = 2;
+    else if (areaKm2 <= 10) gridSize = 3;
+    else if (areaKm2 <= 50) gridSize = 4;
+    else if (areaKm2 <= 200) gridSize = 5;
+    else if (areaKm2 <= 500) gridSize = 6;
+    else gridSize = 7;
 
-    // Alternative dynamic approach: target ~1 point per 2-5 km²
-    const targetDensity = 0.3; // points per km²
+    const targetDensity = 0.3;
     const calculatedSize = Math.sqrt(areaKm2 * targetDensity);
     const dynamicSize = Math.max(2, Math.min(8, Math.ceil(calculatedSize)));
     
-    // Use whichever gives more reasonable sampling
     return Math.max(gridSize, dynamicSize);
   }, []);
 
-  // Optimized point-in-polygon check
-  const isPointInPolygon = useCallback((point, polygonPoints) => {
+  const isPointInPolygon = useCallback((point: Point, polygonPoints: Point[]) => {
     if (!point || !polygonPoints || polygonPoints.length < 3) return false;
     
     const [x, y] = point;
@@ -101,8 +119,7 @@ const ReactMap = () => {
     return inside;
   }, []);
 
-  // Enhanced grid generation with dynamic sizing and better distribution
-  const generateGridPoints = useCallback((polygon) => {
+  const generateGridPoints = useCallback((polygon: PolygonType) => {
     if (!polygon || !polygon.points || polygon.points.length < 3) {
       console.warn('Invalid polygon data for grid generation');
       return [];
@@ -112,37 +129,29 @@ const ReactMap = () => {
       const leafletPolygon = L.polygon(polygon.points);
       const bounds = leafletPolygon.getBounds();
       
-      // Calculate area and optimal grid size
       const areaKm2 = calculatePolygonArea(polygon.points);
       const gridSize = calculateOptimalGridSize(areaKm2);
       
-      console.log(`Polygon ${polygon.id}: Area ~${areaKm2.toFixed(2)} km², Grid: ${gridSize}x${gridSize} (${gridSize * gridSize} points)`);
-      
-      const points = [];
+      const points: L.LatLngTuple[] = [];
       
       const latStep = (bounds.getNorth() - bounds.getSouth()) / gridSize;
       const lngStep = (bounds.getEast() - bounds.getWest()) / gridSize;
       
-      // Ensure we have valid step sizes
       if (latStep <= 0 || lngStep <= 0) {
         console.warn('Invalid polygon bounds for grid generation');
         const center = bounds.getCenter();
-        return [{ lat: center.lat, lng: center.lng }];
+        return [[center.lat, center.lng]];
       }
       
-      // Generate grid points with better distribution
       for (let i = 0; i < gridSize; i++) {
         for (let j = 0; j < gridSize; j++) {
-          // Use different offset strategies for better coverage
           let latOffset, lngOffset;
           
           if (gridSize <= 3) {
-            // For small grids, use center points
             latOffset = 0.5;
             lngOffset = 0.5;
           } else {
-            // For larger grids, use slight randomization for better distribution
-            latOffset = 0.3 + Math.random() * 0.4; // Random between 0.3-0.7
+            latOffset = 0.3 + Math.random() * 0.4;
             lngOffset = 0.3 + Math.random() * 0.4;
           }
           
@@ -150,33 +159,15 @@ const ReactMap = () => {
           const lng = bounds.getWest() + (j + lngOffset) * lngStep;
           
           if (isPointInPolygon([lat, lng], polygon.points)) {
-            points.push({ lat, lng });
+            points.push([lat, lng]);
           }
         }
       }
       
-      // Fallback strategies if no points found
       if (points.length === 0) {
         console.warn(`No grid points found inside polygon ${polygon.id}, using fallback strategies`);
-        
-        // Strategy 1: Try polygon centroid
         const center = bounds.getCenter();
-        if (isPointInPolygon([center.lat, center.lng], polygon.points)) {
-          points.push({ lat: center.lat, lng: center.lng });
-        } else {
-          // Strategy 2: Try vertices of the polygon
-          for (const point of polygon.points.slice(0, 3)) { // Try first 3 vertices
-            if (Array.isArray(point) && point.length >= 2) {
-              points.push({ lat: point[0], lng: point[1] });
-              break;
-            }
-          }
-        }
-        
-        // Strategy 3: Force center point as last resort
-        if (points.length === 0) {
-          points.push({ lat: center.lat, lng: center.lng });
-        }
+        points.push([center.lat, center.lng]);
       }
       
       return points;
@@ -186,21 +177,16 @@ const ReactMap = () => {
     }
   }, [isPointInPolygon, calculatePolygonArea, calculateOptimalGridSize]);
 
-  // Enhanced aggregation with outlier detection
-  const aggregateValues = useCallback((values, aggregationType = 'average') => {
+  const aggregateValues = useCallback((values: (number | null)[], aggregationType = 'average') => {
     if (!Array.isArray(values)) return null;
     
-    const validValues = values.filter(v => 
-      v !== null && 
-      v !== undefined && 
-      typeof v === 'number' && 
-      !isNaN(v)
+    const validValues = values.filter((v): v is number => 
+      v !== null && typeof v === 'number' && !isNaN(v)
     );
     
     if (validValues.length === 0) return null;
     
     try {
-      // Remove outliers for better aggregation (only if we have enough data points)
       let processedValues = validValues;
       if (validValues.length >= 5) {
         const sorted = [...validValues].sort((a, b) => a - b);
@@ -210,7 +196,6 @@ const ReactMap = () => {
         const lowerBound = q1 - 1.5 * iqr;
         const upperBound = q3 + 1.5 * iqr;
         
-        // Filter out extreme outliers
         const filteredValues = validValues.filter(v => v >= lowerBound && v <= upperBound);
         if (filteredValues.length >= Math.ceil(validValues.length * 0.7)) {
           processedValues = filteredValues;
@@ -229,7 +214,6 @@ const ReactMap = () => {
           const mid = Math.floor(sorted.length / 2);
           return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
         case 'weighted_average':
-          // Simple weighted average (can be enhanced with distance weighting)
           return processedValues.reduce((sum, v) => sum + v, 0) / processedValues.length;
         default:
           return processedValues.reduce((sum, v) => sum + v, 0) / processedValues.length;
@@ -240,28 +224,26 @@ const ReactMap = () => {
     }
   }, []);
 
-  // Enhanced label generation
-  const generateLabel = useCallback((polygon, aggregatedValue, sampleCount, minValue, maxValue, timeRange) => {
+  const generateLabel = useCallback((
+    polygon: PolygonType,
+    aggregatedValue: number,
+    sampleCount: number,
+    minValue: number,
+    maxValue: number,
+    timeRange: TimeRange
+  ) => {
     try {
-      if (!polygon || !polygon.dataSource || aggregatedValue === null || aggregatedValue === undefined) {
-        return null;
-      }
+      if (!polygon?.dataSource || aggregatedValue === null) return null;
 
-      const hoursDifference = timeRange?.end && timeRange?.start ? 
-        Math.abs(timeRange.end - timeRange.start) : 0;
-      const timeInfo = hoursDifference > 1 ? ` (${hoursDifference}h avg)` : '';
+      const hoursDifference = timeRange.end && timeRange.start ? 
+        Math.abs(timeRange.end - timeRange.start) / 3600000 : 0;
+      const timeInfo = hoursDifference > 1 ? ` (${hoursDifference.toFixed(1)}h avg)` : '';
       const dataSourceLabel = polygon.dataSource.replace(/_/g, ' ');
       
-      // Calculate area for display
       const areaKm2 = calculatePolygonArea(polygon.points);
       const areaInfo = areaKm2 > 1 ? ` [~${areaKm2.toFixed(1)} km²]` : '';
       
-      // Show range if there's significant variation and multiple samples
-      const showRange = sampleCount > 1 && 
-        minValue !== undefined && 
-        maxValue !== undefined && 
-        Math.abs(maxValue - minValue) > 1.0; // Increased threshold for showing range
-      
+      const showRange = sampleCount > 1 && Math.abs(maxValue - minValue) > 1.0;
       const rangeInfo = showRange ? ` (${minValue.toFixed(1)}-${maxValue.toFixed(1)})` : '';
       const sampleInfo = sampleCount > 1 ? ` [${sampleCount} pts]` : '';
       
@@ -272,78 +254,66 @@ const ReactMap = () => {
     }
   }, [calculatePolygonArea]);
 
-  // Optimized batch fetching with parallel processing and better error handling
   const fetchDataForPolygons = useCallback(async (forceRefresh = false) => {
     if (fetchingRef.current) return;
     if (!polygons || polygons.length === 0) return;
 
     fetchingRef.current = true;
-    console.log(`Starting data fetch for ${polygons.length} polygons...`);
 
     try {
       const updatePromises = polygons.map(async (polygon) => {
         try {
-          if (!polygon || !polygon.dataSource) return { success: false, reason: 'No data source' };
+          if (!polygon.dataSource) return { success: false, reason: 'No data source' };
           if (!forceRefresh && polygon.value !== undefined) return { success: false, reason: 'Already has data' };
 
-          // Generate grid points within the polygon
           const gridPoints = generateGridPoints(polygon);
-          
           if (gridPoints.length === 0) {
-            console.warn(`No valid grid points generated for polygon ${polygon.id}`);
             return { success: false, reason: 'No valid grid points' };
           }
 
-          console.log(`Fetching ${gridPoints.length} points for polygon ${polygon.id}`);
-
-          // Fetch temperature data for all grid points with staggered requests to avoid rate limiting
-          const batchSize = 3; // Process 3 requests at a time
-          const allValues = [];
+          const allValues: (number | null)[] = [];
+          const batchSize = 3;
           
           for (let i = 0; i < gridPoints.length; i += batchSize) {
             const batch = gridPoints.slice(i, i + batchSize);
-            const batchPromises = batch.map((point, idx) => 
-              Promise.race([
-                fetchTemperature(point.lat, point.lng, polygon.dataSource, timeRange),
-                new Promise((_, reject) => 
-                  setTimeout(() => reject(new Error('Timeout')), 15000) // 15 second timeout
-                )
-              ]).catch(error => {
-                console.warn(`Failed to fetch temperature for point ${i + idx} (${point.lat}, ${point.lng}):`, error.message);
-                return null;
-              })
+            const batchPromises = batch.map((point) => 
+              fetchTemperature(
+                point[0],
+                point[1],
+                polygon.dataSource!,
+                {
+                  start: typeof timeRange.start === 'number' ? timeRange.start : Date.now(),
+                  end: typeof timeRange.end === 'number' ? timeRange.end : Date.now()
+                }
+              )
+                .catch(error => {
+                  console.warn(`Failed to fetch temperature:`, error.message);
+                  return null;
+                })
             );
             
             const batchValues = await Promise.all(batchPromises);
             allValues.push(...batchValues);
             
-            // Small delay between batches to be nice to the API
             if (i + batchSize < gridPoints.length) {
               await new Promise(resolve => setTimeout(resolve, 100));
             }
           }
           
-          const validValues = allValues.filter(v => v !== null && v !== undefined && typeof v === 'number');
+          const validValues = allValues.filter((v): v is number => v !== null);
           
           if (validValues.length === 0) {
-            console.warn(`No valid temperature data found for polygon ${polygon.id}`);
             return { success: false, reason: 'No valid data' };
           }
 
-          // Calculate statistics
           const aggregatedValue = aggregateValues(validValues, 'average');
           const minValue = Math.min(...validValues);
           const maxValue = Math.max(...validValues);
-          const dataQuality = (validValues.length / gridPoints.length) * 100;
-          
-          console.log(`Polygon ${polygon.id}: ${validValues.length}/${gridPoints.length} points (${dataQuality.toFixed(0)}% success rate)`);
           
           if (aggregatedValue === null) {
-            console.warn(`Failed to aggregate values for polygon ${polygon.id}`);
             return { success: false, reason: 'Aggregation failed' };
           }
 
-          // Generate enhanced label
           const label = generateLabel(
             polygon, 
             aggregatedValue, 
@@ -354,11 +324,9 @@ const ReactMap = () => {
           );
           
           if (!label) {
-            console.warn(`Failed to generate label for polygon ${polygon.id}`);
             return { success: false, reason: 'Label generation failed' };
           }
 
-          // Update polygon with additional metadata
           updatePolygon({ 
             ...polygon, 
             value: aggregatedValue,
@@ -366,7 +334,7 @@ const ReactMap = () => {
             metadata: {
               sampleCount: validValues.length,
               totalRequested: gridPoints.length,
-              dataQuality,
+              dataQuality: (validValues.length / gridPoints.length) * 100,
               minValue,
               maxValue,
               lastUpdated: new Date().toISOString()
@@ -376,16 +344,13 @@ const ReactMap = () => {
           return { success: true, sampleCount: validValues.length };
         } catch (error) {
           console.error(`Error processing polygon ${polygon?.id}:`, error);
-          return { success: false, reason: error.message };
+          return { success: false, reason: (error as Error).message };
         }
       });
 
       const results = await Promise.all(updatePromises);
       const successResults = results.filter(r => r.success);
       const totalSamples = successResults.reduce((sum, r) => sum + (r.sampleCount || 0), 0);
-      
-      console.log(`Fetch complete: ${successResults.length}/${polygons.length} polygons updated, ${totalSamples} total data points`);
-
     } catch (error) {
       console.error('Error in fetchDataForPolygons:', error);
     } finally {
@@ -393,50 +358,40 @@ const ReactMap = () => {
     }
   }, [polygons, generateGridPoints, aggregateValues, generateLabel, updatePolygon, timeRange]);
 
-  // Memoize filtered polygons to prevent unnecessary re-renders
   const polygonsNeedingData = useMemo(() => 
-    polygons?.filter(p => p?.dataSource && p?.value === undefined) || [], 
+    polygons.filter(p => p.dataSource && p.value === undefined), 
     [polygons]
   );
 
   const polygonsWithDataSource = useMemo(() => 
-    polygons?.filter(p => p?.dataSource) || [], 
+    polygons.filter(p => p.dataSource), 
     [polygons]
   );
 
   const polygonValuesString = useMemo(() => 
-    polygons?.map(p => p?.value).join(',') || '', 
+    polygons.map(p => p.value).join(','), 
     [polygons]
   );
 
-  // Effect for initial data fetching
   useEffect(() => {
     if (polygonsNeedingData.length > 0) {
       fetchDataForPolygons(false);
     }
   }, [polygonsNeedingData, fetchDataForPolygons]);
 
-  // Effect for time range changes
   useEffect(() => {
     if (polygonsWithDataSource.length > 0) {
       fetchDataForPolygons(true);
     }
   }, [timeRange, polygonsWithDataSource, fetchDataForPolygons]);
 
-  // Effect for threshold evaluation
   useEffect(() => {
-    if (thresholdRules?.length > 0 && polygons?.some(p => p?.value !== undefined)) {
-      try {
-        evaluateThresholds();
-      } catch (error) {
-        console.error('Error evaluating thresholds:', error);
-      }
+    if (thresholdRules.length > 0 && polygons.some(p => p.value !== undefined)) {
+      evaluateThresholds();
     }
-  }, [thresholdRules, polygonValuesString, evaluateThresholds]);
+  }, [thresholdRules, polygonValuesString, evaluateThresholds, polygons]);
 
-  // Return early if required context data is not available
   if (!polygons) {
-    console.warn('Polygons data not available from context');
     return <div>Loading map...</div>;
   }
 
@@ -453,11 +408,7 @@ const ReactMap = () => {
       />
       <LeafletDrawControl />
       {polygons.map((polygon) => {
-        // Add validation for polygon data
-        if (!polygon || !polygon.id || !polygon.points || !Array.isArray(polygon.points)) {
-          console.warn('Invalid polygon data:', polygon);
-          return null;
-        }
+        if (!polygon.points || !Array.isArray(polygon.points)) return null;
 
         return (
           <Polygon
