@@ -349,8 +349,7 @@ const ReactMap = () => {
       });
 
       const results = await Promise.all(updatePromises);
-      const successResults = results.filter(r => r.success);
-      const totalSamples = successResults.reduce((sum, r) => sum + (r.sampleCount || 0), 0);
+     results.filter(r => r.success);
     } catch (error) {
       console.error('Error in fetchDataForPolygons:', error);
     } finally {
